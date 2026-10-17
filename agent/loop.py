@@ -189,7 +189,9 @@ class Agent:
                 time.sleep(SETTLE_S)
                 check = self.timer("jev_check", self.jev.check, self._shot("check"), sub.get("expect", ""))
                 clicked = getattr(self, "_last_click", None)
-                if check["met"] < 0.5 or check["blocked"] > 0.5:
+                # A dialog only counts against the step when the expected outcome is not on screen:
+                # an expected dialog (a file chooser the step opened) is success, not a blocker.
+                if check["met"] < 0.5:
                     history.append(
                         f"- {sub.get('subgoal')}: automatic check says NOT met (expected '{sub.get('expect')}', "
                         f"P(met)={check['met']:.2f}, P(blocking dialog)={check['blocked']:.2f}; last click {clicked}). "
@@ -199,7 +201,8 @@ class Agent:
                     self._loop_guard(history, failures_in_a_row)
                     break
                 failures_in_a_row = 0
-                history.append(f"- {sub.get('subgoal')}: ok")
+                note = f" (a dialog is open, P={check['blocked']:.2f})" if check["blocked"] > 0.5 else ""
+                history.append(f"- {sub.get('subgoal')}: ok{note}")
 
         return {"status": status, "luna_calls": luna_calls, "history": list(history), "timing": self.timer.summary()}
 
