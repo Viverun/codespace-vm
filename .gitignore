@@ -1,0 +1,5 @@
+results/
+__pycache__/
+*.qcow2
+*.zip
+.venv/
