@@ -1,6 +1,6 @@
 {
   "name": "codespace-vm",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": { "ghcr.io/devcontainers/features/docker-in-docker:2": {} },
   "privileged": true,
   "hostRequirements": { "cpus": 4, "memory": "16gb" },
