@@ -5,7 +5,7 @@ import json
 import os
 
 from openai import OpenAI
-from typesafe_sdk import Box, Image, Noul, TypeSafeClient
+from typesafe_sdk import Box, Choice, Image, Noul, TypeSafeClient
 
 LUNA_ENDPOINT = os.environ.get(
     "AZURE_OPENAI_ENDPOINT", "https://khanjamilahmed202-3046-resource.openai.azure.com/openai/v1"
@@ -42,6 +42,25 @@ class Jev:
             },
         )
         return {"met": r.nouls["met"].noul, "blocked": r.nouls["blocked"].noul}
+
+    def pick_mark(self, marked_jpeg: bytes, target: str, n: int, min_conf: float = 0.5) -> int | None:
+        """Which numbered red box on the image is `target`? Returns its number, or None."""
+        criteria = {str(i): None for i in range(1, n + 1)}
+        criteria["none"] = "None of the numbered boxes is the target."
+        r = self.client.system_one(
+            state={"screen": Image(marked_jpeg)},
+            questions={
+                "mark": Choice(
+                    instructions=f"`screen` shows UI elements outlined in red with a number above each. "
+                    f"Which number marks {target}?",
+                    criteria=criteria,
+                )
+            },
+        )
+        answer = r.choices["mark"]
+        if answer.choice == "none" or answer.confidence < min_conf:
+            return None
+        return int(answer.choice)
 
 
 GROUNDED_PROMPT = """You operate an Ubuntu 22.04 desktop (GNOME, 1920x1080) to complete the user's task.
@@ -86,7 +105,7 @@ class Luna:
 
     def next(self, jpeg: bytes, instruction: str, history: list[str]) -> dict:
         image = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
-        text = f"Task: {instruction}\n\nHistory so far:\n" + ("\n".join(history[-15:]) or "(none)")
+        text = f"Task: {instruction}\n\nHistory so far:\n" + ("\n".join(history[-8:]) or "(none)")
         r = self.client.chat.completions.create(
             model=LUNA_DEPLOYMENT,
             response_format={"type": "json_object"},

@@ -11,9 +11,13 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from agent.marks import draw_marks, find_elements
+
 SCREEN_W, SCREEN_H = 1920, 1080
 SHOT_W, SHOT_H = 960, 540
 SETTLE_S = 0.4  # let the UI react before a checkpoint screenshot
+REFINE_MAX_W = 0.2  # boxes narrower than this (fraction of width) get snapped to a real element
+CROP_W, CROP_H = 400, 300  # full-resolution crop centered on the coarse guess, for set-of-marks refine
 
 FAST_SHOT = (
     "import pyautogui, io, base64; im = pyautogui.screenshot().convert('RGB'); "
@@ -50,6 +54,16 @@ class VM:
 
     def shot(self) -> bytes:
         return base64.b64decode(self.c.execute_python_command(FAST_SHOT)["output"].strip())
+
+    def crop(self, cx: int, cy: int, width: int, height: int) -> bytes:
+        """Full-resolution JPEG of a width x height region centered on (cx, cy), gray-padded past screen edges."""
+        code = (
+            "import pyautogui, io, base64; from PIL import Image; "
+            f"src = pyautogui.screenshot().convert('RGB'); out = Image.new('RGB', ({width}, {height}), (128, 128, 128)); "
+            f"out.paste(src.crop(({cx - width // 2}, {cy - height // 2}, {cx - width // 2 + width}, {cy - height // 2 + height})), (0, 0)); "
+            "b = io.BytesIO(); out.save(b, 'JPEG', quality=85); print(base64.b64encode(b.getvalue()).decode())"
+        )
+        return base64.b64decode(self.c.execute_python_command(code)["output"].strip())
 
 
 def _center(box: dict) -> tuple[int, int]:
@@ -107,8 +121,32 @@ class Agent:
         found = self.timer("jev_locate", self.jev.locate, shot, action["target"])
         if found["visible"] < 0.5 or found["confidence"] < self.box_min_conf:
             return f"could not find '{action['target']}' (visible={found['visible']:.2f}, box conf={found['confidence']:.2f})"
-        self._last_click = f"{_center(found['box'])} for '{action['target']}'"
-        return _center(found["box"])
+        x, y = _center(found["box"])
+        if found["box"]["right"] - found["box"]["left"] < REFINE_MAX_W:
+            x, y = self._refine(action["target"], x, y)
+        self._last_click = f"{(x, y)} for '{action['target']}'"
+        return x, y
+
+    def _refine(self, target: str, x: int, y: int) -> tuple[int, int]:
+        """Small target: snap the coarse guess to a real element using numbered marks.
+
+        Box error is a few percent of the image size (~30 px at 1920 wide), enough to miss a small
+        switch. Edge detection finds element rectangles in a full-resolution crop around the guess;
+        Jev picks the numbered one that matches, and we click its exact center.
+        """
+        crop = self.timer("crop", self.vm.crop, x, y, CROP_W, CROP_H)
+        rects = find_elements(crop)
+        if not rects:
+            return x, y
+        marked = draw_marks(crop, rects)
+        if self.debug_dir:
+            self._shot_no += 1
+            (self.debug_dir / f"{self._shot_no:03d}_marks.jpg").write_bytes(marked)
+        pick = self.timer("jev_marks", self.jev.pick_mark, marked, target, len(rects))
+        if pick is None:
+            return x, y  # no confident pick: keep the coarse guess
+        rx, ry, rw, rh = rects[pick - 1]
+        return x - CROP_W // 2 + rx + rw // 2, y - CROP_H // 2 + ry + rh // 2
 
     def run(self, instruction: str) -> dict:
         history = _LiveLog()
