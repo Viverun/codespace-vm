@@ -73,6 +73,14 @@ def _code(action: dict, xy: tuple[int, int] | None) -> str | None:
     return None
 
 
+class _LiveLog(list):
+    """History list that also prints each entry as it is added."""
+
+    def append(self, item: str) -> None:
+        print("   " + item, flush=True)
+        super().append(item)
+
+
 class Agent:
     def __init__(self, vm: VM, luna, jev=None, max_luna_calls: int = 20, box_min_conf: float = 0.5):
         self.vm, self.luna, self.jev = vm, luna, jev
@@ -90,7 +98,7 @@ class Agent:
         return _center(found["box"])
 
     def run(self, instruction: str) -> dict:
-        history: list[str] = []
+        history = _LiveLog()
         status = "continue"
         luna_calls = 0
         while luna_calls < self.max_luna_calls:
@@ -102,6 +110,7 @@ class Agent:
                 history.append(f"[planner error: {e!s:.200}]")
                 continue
             status = reply.get("status", "continue")
+            print(f"  luna #{luna_calls}: {status}, {len(reply.get('plan', []))} subgoal(s)", flush=True)
             if status in ("done", "infeasible"):
                 break
 
@@ -133,4 +142,4 @@ class Agent:
                     break
                 history.append(f"- {sub.get('subgoal')}: ok")
 
-        return {"status": status, "luna_calls": luna_calls, "history": history, "timing": self.timer.summary()}
+        return {"status": status, "luna_calls": luna_calls, "history": list(history), "timing": self.timer.summary()}
