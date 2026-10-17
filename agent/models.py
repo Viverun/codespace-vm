@@ -63,6 +63,8 @@ ACTION is one of:
   {"type": "wait", "seconds": 1}
 Describe click targets visually and uniquely (label text, position, color); never give coordinates.
 Prefer keyboard shortcuts and the terminal (ctrl+alt+t) when they are faster than clicking.
+Toggles and checkboxes flip on every click: check their current state on the screenshot before clicking.
+History lines come from an automatic checker that can be wrong; trust what you see on the screenshot.
 Use "done" only when the task is complete on screen, "infeasible" only when it cannot be done at all."""
 
 BASELINE_PROMPT = GROUNDED_PROMPT.replace(

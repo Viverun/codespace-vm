@@ -9,6 +9,7 @@ mode "luna_only": baseline. Luna plans one subgoal per call with pixel coordinat
 import base64
 import time
 from collections import defaultdict
+from pathlib import Path
 
 SCREEN_W, SCREEN_H = 1920, 1080
 SHOT_W, SHOT_H = 960, 540
@@ -82,27 +83,40 @@ class _LiveLog(list):
 
 
 class Agent:
-    def __init__(self, vm: VM, luna, jev=None, max_luna_calls: int = 20, box_min_conf: float = 0.5):
+    def __init__(self, vm: VM, luna, jev=None, max_luna_calls: int = 20, box_min_conf: float = 0.5, debug_dir: Path | None = None):
         self.vm, self.luna, self.jev = vm, luna, jev
         self.max_luna_calls, self.box_min_conf = max_luna_calls, box_min_conf
         self.timer = Timer()
+        self.debug_dir, self._shot_no = debug_dir, 0
+        if debug_dir:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def _shot(self, label: str) -> bytes:
+        """Screenshot, also saved to debug_dir as NNN_label.jpg for inspecting runs."""
+        data = self.timer("screenshot", self.vm.shot)
+        if self.debug_dir:
+            self._shot_no += 1
+            (self.debug_dir / f"{self._shot_no:03d}_{label}.jpg").write_bytes(data)
+        return data
 
     def _target_xy(self, action: dict) -> tuple[int, int] | str:
         """Resolve a click/scroll target to screen pixels, or return a failure reason."""
         if self.jev is None:  # baseline: coordinates are in screenshot space
             return round(action["x"] * SCREEN_W / SHOT_W), round(action["y"] * SCREEN_H / SHOT_H)
-        shot = self.timer("screenshot", self.vm.shot)
+        shot = self._shot("locate")
         found = self.timer("jev_locate", self.jev.locate, shot, action["target"])
         if found["visible"] < 0.5 or found["confidence"] < self.box_min_conf:
             return f"could not find '{action['target']}' (visible={found['visible']:.2f}, box conf={found['confidence']:.2f})"
+        self._last_click = f"{_center(found['box'])} for '{action['target']}'"
         return _center(found["box"])
 
     def run(self, instruction: str) -> dict:
         history = _LiveLog()
         status = "continue"
         luna_calls = 0
+        failures_in_a_row = 0
         while luna_calls < self.max_luna_calls:
-            shot = self.timer("screenshot", self.vm.shot)
+            shot = self._shot("plan")
             luna_calls += 1
             try:
                 reply = self.timer("luna", self.luna.next, shot, instruction, history)
@@ -128,18 +142,35 @@ class Agent:
                         self.timer("act", self.vm.act, code)
                 if failure:
                     history.append(f"- {sub.get('subgoal')}: STOPPED, {failure}")
+                    failures_in_a_row += 1
+                    self._loop_guard(history, failures_in_a_row)
                     break
                 if self.jev is None:
                     history.append(f"- {sub.get('subgoal')}: executed {sub.get('actions')}")
                     continue
                 time.sleep(SETTLE_S)
-                check = self.timer("jev_check", self.jev.check, self.timer("screenshot", self.vm.shot), sub.get("expect", ""))
+                check = self.timer("jev_check", self.jev.check, self._shot("check"), sub.get("expect", ""))
+                clicked = getattr(self, "_last_click", None)
                 if check["met"] < 0.5 or check["blocked"] > 0.5:
                     history.append(
-                        f"- {sub.get('subgoal')}: CHECK FAILED (expected '{sub.get('expect')}', "
-                        f"P(met)={check['met']:.2f}, P(blocking dialog)={check['blocked']:.2f})"
+                        f"- {sub.get('subgoal')}: automatic check says NOT met (expected '{sub.get('expect')}', "
+                        f"P(met)={check['met']:.2f}, P(blocking dialog)={check['blocked']:.2f}; last click {clicked}). "
+                        "The check can be wrong: verify on the current screenshot."
                     )
+                    failures_in_a_row += 1
+                    self._loop_guard(history, failures_in_a_row)
                     break
+                failures_in_a_row = 0
                 history.append(f"- {sub.get('subgoal')}: ok")
 
         return {"status": status, "luna_calls": luna_calls, "history": list(history), "timing": self.timer.summary()}
+
+    @staticmethod
+    def _loop_guard(history: list, failures_in_a_row: int) -> None:
+        if failures_in_a_row >= 2:
+            history.append(
+                f"[{failures_in_a_row} attempts in a row failed. First look at the screenshot: if the step actually "
+                "succeeded, move on. Otherwise do NOT repeat the same approach: use a different method "
+                "(keyboard shortcut, terminal command, menu, or another UI path). Never click a toggle again "
+                "without first checking its current state on the screenshot.]"
+            )

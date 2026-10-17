@@ -55,7 +55,7 @@ def main() -> None:
             task_id = config["id"]
             print(f"\n=== {task_id[:8]} {config['instruction'][:100]}", flush=True)
             env.reset(task_config=config)
-            agent = Agent(VM(env.controller), luna, jev, max_luna_calls=args.max_luna_calls)
+            agent = Agent(VM(env.controller), luna, jev, max_luna_calls=args.max_luna_calls, debug_dir=out / f"{task_id}_shots")
             t0 = time.perf_counter()
             try:
                 result = agent.run(config["instruction"])
